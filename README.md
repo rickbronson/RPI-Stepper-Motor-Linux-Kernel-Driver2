@@ -15,7 +15,6 @@ Features
 - Only uses 6 DMA's per motor STEP cycle
 - Pulse edge granularity based on 27 MHz
 - Can use any unused GPIO's for STEP, DIRECTION, and MICROSTEP control pins
-- Driver smoothly ramps motor up to max speed and back down again based on a (approximate) sinusoidal curve
 - Drive multiple motors.
 - Can handle the same microstep control lines going to multiple motors, just use the same GPIO values as the first motor.
 
@@ -23,8 +22,6 @@ Constraints
 
 - GPIO edge granularity is 1/PWM_FREQ, about 37ns
 - Minimum time between any two GPIO edges (can be different GPIO's or the same) is about 500ns, this seems to be a constraint of the DMA
-- Driver requires a minimum amount of steps when any motor is already running. If the DMA is stilll streaming to motor 1 and you ask to move motor 2, The driver has to copy existing DMA control blocks (CB's), build the new motors DMA CB's and then combine them into one stream in the existing live DMA buffer.  If the minimum is not met, I just wait until the existing stream is done.  The minimum is based on time it takes to do the copy and build plus a guess as to the time it takes to do the combine.  The fudge factor to estimate the combine time can be set via priv->step_cmd.combine_ticks_per_step.  NOTE: If the existing DMA buffer is appended with new streams (this only happens when the current DMA is not finished) enough times you will run into the end of the DMA buffer.
-- When the minimum time cannot be satisfied then the driver will wait (or not) for the current DMA stream to finish for priv->step_cmd.wait_timeout (in milliseconds).  If this value is zero then it doesn't wait.
 - Maximum number of steps is hardcoded as MAX_STEPS in rpi4-stepper.h.  This has a big impact on the amount of alloc'd memory.
 - Max number of motors set by MAX_MOTORS.  This has a big impact on the amount of alloc'd memory.
 - You may have to tweak DMA_CHANNEL depending on your kernel
@@ -36,7 +33,7 @@ Untested
 1. Get and build everything. We have to tweak the device tree and need a header inside the kernel so we have to build just the device tree.  Optionally, you can keep your old kernel and device tree so you can go back to that if need be.
 
 ```
-git clone --recursive https://github.com/rickbronson/RPI-Stepper-Motor-Linux-Kernel-Driver.git
+git clone --recursive https://github.com/rickbronson/RPI-Stepper-Motor-Linux-Kernel-Driver2.git
 ```
 
   At this point we need to get a kernel running that we can get the linux-headers for.  I couldn't not get the headers for the kernel I got with the zip file.
@@ -44,22 +41,32 @@ git clone --recursive https://github.com/rickbronson/RPI-Stepper-Motor-Linux-Ker
 ```
 sudo cp -a /boot /boot.sav  # save old kernel and device tree (optional)
 sudo apt update
-sudo rpi-update stable  # get stable kernel
-sudo reboot # after which you should be running new kernel
-```
-  Now get the kernel headers for the updated kernel and other programs we need to build the device tree.
+sudo apt install git bc bison flex libssl-dev make emacs xterm \
+linux-headers raspberrypi-kernel-headers build-essential bc \
+git wget bison flex libssl-dev make libncurses-dev
 
-```
-sudo apt install raspberrypi-kernel-headers git bc bison flex libssl-dev make
 git clone --depth=1 https://github.com/raspberrypi/linux
 cd linux
+KERNEL=kernel7l-stepper
 make bcm2711_defconfig
+# config.txt file to select the kernel that the Pi will boot into: kernel=kernel-$USER.img
+sed -i -e "s/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-v7l-stepper\"/" .config
+
+make -j4 zImage modules dtbs
+sudo make modules_install
+sudo cp arch/arm/boot/dts/*.dtb /boot/
+sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
+sudo cp arch/arm/boot/zImage /boot/$KERNEL.img
+sudo bash -c "echo kernel=$KERNEL.img >> /boot/config.txt"
+sudo reboot # to check that the above all worked and you are running a new kernel, after reboot do:
+
+uname -a  # should show a new kernel
 
 ```
 
   Now we need to tweaked a device tree file (NOTE: Only do this once!)
 
-```
+# Now update the device tree:
 cat >> arch/arm/boot/dts/bcm270x.dtsi <<'EOF'
 &pwm {                                                                        
       dmas = <&dma 5>;                                                        
@@ -67,20 +74,15 @@ cat >> arch/arm/boot/dts/bcm270x.dtsi <<'EOF'
       status = "okay";                                                        
 };
 EOF
-```
-
-  Then continue building the kernel device tree
-
-```
 make -j4 dtbs
 sudo cp arch/arm/boot/dts/*.dtb /boot/
-sudo reboot # to load the new device tree
+sudo reboot
 ```
 
   Lastly build this driver using the kernel headers installed above.
 
 ```
-cd ../RPI-Stepper-Motor-Linux-Kernel-Driver/src/
+cd ../RPI-Stepper-Motor-Linux-Kernel-Driver2/src/
 make
 ```
 
@@ -88,7 +90,7 @@ make
 --------------
 
 Simplified hookup of the motor with a DRV8825 driver board and serial debug
-![Motor hookup](https://github.com/rickbronson/RPI-Stepper-Motor-Linux-Kernel-Driver/blob/master/docs/hardware/schematic10.png "Motor hookup")
+![Motor hookup](https://github.com/rickbronson/RPI-Stepper-Motor-Linux-Kernel-Driver2/blob/master/docs/hardware/schematic12.png "Motor hookup")
 
 3. Run
 --------------
@@ -96,11 +98,11 @@ Simplified hookup of the motor with a DRV8825 driver board and serial debug
   do "./test-stepper --help" for test program options
 
 ```
-cd ~/RPI-Stepper-Motor-Linux-Kernel-Driver/src
+cd ~/RPI-Stepper-Motor-Linux-Kernel-Driver2/src
 sudo rmmod pwm-bcm2835  # remove existing driver if any
 sudo rmmod pwm-stepper-bcm2835 # remove our driver if it's already installed
 sudo insmod ./pwm-stepper-bcm2835.ko
-sudo test-stepper -d 500 -s 4000 -r 1 -m 7  # move 500 microsteps, start at 400Hz, max 4000Hz
+sudo test-stepper -d 500 -s 4000 -r 1 -m 7  # move 500 microsteps
 sudo test-stepper -d 500 -s 4000 -r 3 -m 7  # same, more aggressive curve
 ```
 
@@ -109,12 +111,6 @@ sudo test-stepper -d 500 -s 4000 -r 3 -m 7  # same, more aggressive curve
 4. Debug
 
   See pwm-stepper-bcm2835.c for printk statements.  Use "sudo dmesg" to view them.
-
-  You can generate the speed profile using the test-stepper program with the "-g" option as below:
-
-```
-./test-stepper -d 256 -s 128000 -m 7 -g
-```
 
 5. Comments/suggestions
 
