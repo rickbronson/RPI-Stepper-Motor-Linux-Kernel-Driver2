@@ -66,12 +66,12 @@ uname -a  # should show a new kernel
 
   Now we need to tweaked a device tree file (NOTE: Only do this once!)
 
-# Now update the device tree:
+```
 cat >> arch/arm/boot/dts/bcm270x.dtsi <<'EOF'
-&pwm {                                                                        
-      dmas = <&dma 5>;                                                        
-      dma-names = "rx-tx";                                                    
-      status = "okay";                                                        
+&pwm {
+      dmas = <&dma 5>;
+      dma-names = "rx-tx";
+      status = "okay";
 };
 EOF
 make -j4 dtbs
