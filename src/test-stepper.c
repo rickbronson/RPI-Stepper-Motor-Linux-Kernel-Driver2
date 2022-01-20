@@ -113,7 +113,7 @@ struct stepper_priv {
 struct STEPPER_SETUP setup[] =
 	{
 	{
-	.distance = 1000,  /* in steps NOTE: signed, 
+	.distance = 20,  /* in steps NOTE: signed, 
 										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
 	.speed = 777,  /* max speed in steps/second NOTE: if = 0 then stop */
 	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
@@ -124,7 +124,7 @@ struct STEPPER_SETUP setup[] =
 	.gpios[GPIO_MICROSTEP2] = GPIO_21,
 	},
 	{
-	.distance = 1000,  /* in steps NOTE: signed, 
+	.distance = 20,  /* in steps NOTE: signed, 
 										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
 	.speed = 500,  /* max speed in steps/second NOTE: if = 0 then stop */
 	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */

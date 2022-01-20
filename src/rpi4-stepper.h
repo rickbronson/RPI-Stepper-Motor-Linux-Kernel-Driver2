@@ -98,11 +98,9 @@ struct STEPPER_SETUP
 	u32 status;  /* upon read, shows the control status register of the DMA, see page 52 of rpi_DATA_2711_1p0.pdf  */
 	};
 
-#define MAX_MOTORS 2 /* max number of motors we'll drive */
+#define MAX_MOTORS 2 /* max number of motors we'll drive, if you change this, you may have to change MAX_STEPS because the malloc fails */
 #if MAX_MOTORS > 2
 #define MAX_STEPS 3000
 #else
-#define MAX_STEPS 4500  /* if we only have 2 motors then this can be larger */
+#define MAX_STEPS 4500
 #endif
-#define RPI4_CRYSTAL_FREQ 54000000
-#define PWM_FREQ (RPI4_CRYSTAL_FREQ / 2)  /* set for max granularity */

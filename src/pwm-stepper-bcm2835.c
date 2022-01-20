@@ -70,6 +70,9 @@ MODULE_AUTHOR("Rick Bronson <rick@efn.org>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Broadcom BCM2835 PWM for stepper motor driver");
 
+#define RPI4_CRYSTAL_FREQ 54000000
+#define PWM_FREQ (RPI4_CRYSTAL_FREQ / 2)  /* set for max granularity */
+
 #define PERI_DMA_MASK 0x7fffffff  /* DMA seems to have a different view of addresses */
 #define PERI_BASE   0xfe000000  /* 0xfe000000 for BCM2711,
 																	 0x20000000 for BCM2835,
@@ -129,6 +132,10 @@ typedef enum {  /* for build_dma_thread() */
 	USE_DMA_BUF,
 	USE_BUILD_BUF,} BUILDTYPE;
 
+typedef enum {  /* for waiting when busy */
+	STEPPER_STATE_IDLE,
+	STEPPER_STATE_BUSY,} STATETYPE;
+	
 /* GPIO registers */
 struct S_GPIO_REGS
 	{
@@ -310,6 +317,8 @@ struct stepper_priv {
 #define NO_MOTOR 255
 	unsigned char gpio2motor[GPIO_RPI4_MAX];  /* Keeps track of motor index */
 	int timer_save;
+	STATETYPE state;
+	wait_queue_head_t wait_q;
 	};
 
 /* request one GPIO output, set to value */
@@ -422,18 +431,18 @@ static NOINLINE void setup_pwm(struct stepper_priv *priv)
 
 	/* Set up PWM */
 	pwm_regs->control.ctl = 0;  /* reset PWM */
-	udelay(10);
+//	udelay(10);
 
 	pwm_regs->sta = -1;
-	udelay(10);
+//	udelay(10);
 
 	/* enable PWM DMA, raise panic and dreq thresholds to 1 NOTE: setting DREQ(X) will causse
 (X+3)/2 glitch cycles (~650 KHz) to come out before our waveform starts */
 	pwm_regs->dmac = PWM_DMAC_ENAB | PWM_DMAC_PANIC(15) | PWM_DMAC_DREQ(PWM_DMAC_DREQ_VAL);
-	udelay(10);
+//	udelay(10);
 
 	pwm_regs->control.ctl = PWM_CTL_CLRF1;  /* clear PWM fifo */
-	udelay(10);
+//	udelay(10);
 
 	/* enable PWM channel 1 and use fifo */
 	pwm_regs->control.ctl = PWM_CTL_USEF1 | PWM_CTL_MODE1 | PWM_CTL_PWEN1;
@@ -594,6 +603,13 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 #endif
 		 ;
 
+	ret = wait_event_interruptible_timeout(priv->wait_q, priv->state == STEPPER_STATE_IDLE, msecs_to_jiffies(50));
+	if (!ret)
+		return -ETIMEDOUT;
+	if (ret < 0)
+		return ret; /* got a signal */
+	priv->state = STEPPER_STATE_BUSY;
+		
 	timer_save = *priv->system_timer_regs;  /* save current timer */
 	if (priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] == NO_MOTOR)
 		{  /* this is a new motor, request gpio's */
@@ -607,12 +623,14 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_STEP], 0);
 		if (ret) {
 			printk(KERN_ERR "pwm-stepper Requesting GPIO's that are already used\n");
-			return -EBUSY;
+			count = -EBUSY;
+			goto bail;
 			}
 		}
 	if (abs(p_cmd->distance) > MAX_STEPS / priv->motors) {
 		printk(KERN_ERR "pwm-stepper Exceeding size of %d max steps\n", MAX_STEPS / priv->motors);
-		return -EINVAL;
+		count = -EINVAL;
+		goto bail;
 		}
 	memcpy(&priv->step_cmd[priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]], buffer, count);  /* save this command */
 
@@ -636,7 +654,8 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 		if (build_steps <= 0) {  /* did build fail? */
 			report_debug("4");
 			printk(KERN_ERR "pwm-stepper build error\n");
-			return -EINVAL;  /* error */
+			count = -EINVAL;  /* error */
+			goto bail;
 			}
 		build_cbsA = priv->build_cbs1;  /* from now on, build in cbs1 */
 		if (cntr == 0)
@@ -650,7 +669,8 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 		if (combine_steps <= 0) {  /* did combine fail? */
 			report_debug("5");
 			printk(KERN_ERR "pwm-stepper combine error\n");
-			return -EINVAL;  /* error */
+			count = -EINVAL;  /* error */
+			goto bail;
 			}
 		/* swap B and C build bufs */
 #if MAX_MOTORS > 2
@@ -664,6 +684,9 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 
 	start_dma(priv, next_dma_buf);
 	report_debug("G");  /* everything AOK */
+bail:
+	priv->state = STEPPER_STATE_IDLE;
+	wake_up_interruptible(&priv->wait_q);
 	return count;
 	}
 
@@ -711,6 +734,7 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 		printk(KERN_ERR "pwm-stepper: priv alloc failed, decrease MAX_STEPS\n");
 		return -ENOMEM;
 		}
+	init_waitqueue_head(&priv->wait_q);
 	init_completion(&priv->dma_cmpl);
 	memset(priv->gpio2motor, NO_MOTOR, sizeof(priv->gpio2motor));  /* set to No Motor */
 	platform_set_drvdata(pdev, priv);
