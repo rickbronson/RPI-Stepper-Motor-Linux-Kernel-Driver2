@@ -115,10 +115,12 @@ MODULE_DESCRIPTION("Broadcom BCM2835 PWM for stepper motor driver");
 
 // #define DEBUG
 #ifdef DEBUG
+#define NOINLINE noinline
 #define PRINTI(fmt, args...) printk(KERN_INFO fmt, ## args)
 #define report_debug(num) \
 	PRINTI("pwm-stepper debug " num " conblk = 0x%x cs = 0x%x build steps = %d\n", (int) priv->dma_regs->conblk_ad, (int) priv->dma_regs->cs, build_steps);
 #else
+#define NOINLINE
 #define PRINTI(fmt, args...)
 #define report_debug(num)
 #endif	/* ATA_VERBOSE_DEBUG */
@@ -328,7 +330,7 @@ static int request_set_gpio(struct stepper_priv *priv, GPIO pin, int value)
 	}
 
 /* fast copy 3 CB's, way faster than memcpy */
-static noinline __naked void memcpy_cb3(struct dma_cb3 *dst, struct dma_cb3 *src, int size)
+static NOINLINE __naked void memcpy_cb3(struct dma_cb3 *dst, struct dma_cb3 *src, int size)
 	{
 	asm volatile (
     "    mov	ip, sp     \n"
@@ -346,7 +348,7 @@ static noinline __naked void memcpy_cb3(struct dma_cb3 *dst, struct dma_cb3 *src
 #define CB_RANGE_OFFSET 0
 #define range_addr src1  /* this get's set according to CB_RANGE_OFFSET above ie, 0 is src1, 1 is src2, etc */
 /* combine from priv->build_cbs and pCbs_src to run_cbs, return number of blocks combined, takes about 1800us for total of 800+214 steps */
-static noinline int combine_dma_threads(struct stepper_priv *priv, struct dma_cb3 *pCbs_dest, struct dma_cb3 *pCbs_src1, struct dma_cb3 *pCbs_src2, BUILDTYPE flag)
+static NOINLINE int combine_dma_threads(struct stepper_priv *priv, struct dma_cb3 *pCbs_dest, struct dma_cb3 *pCbs_src1, struct dma_cb3 *pCbs_src2, BUILDTYPE flag)
 	{
 	struct pwm_dma_data *dma_send_buf = priv->dma_send_buf;
 	u32 *p_range;
@@ -414,7 +416,7 @@ static noinline int combine_dma_threads(struct stepper_priv *priv, struct dma_cb
 	return half_steps / 2;  /* return steps */
 	}
 
-static noinline void setup_pwm(struct stepper_priv *priv)
+static NOINLINE void setup_pwm(struct stepper_priv *priv)
 	{
 	struct S_PWM_REGS *pwm_regs = priv->pwm_regs;
 
@@ -438,7 +440,7 @@ static noinline void setup_pwm(struct stepper_priv *priv)
 
 	}
 
-static noinline void start_dma(struct stepper_priv *priv, struct dma_cb1 *pCbs)
+static NOINLINE void start_dma(struct stepper_priv *priv, struct dma_cb1 *pCbs)
 	{
 	int index;
 
@@ -509,7 +511,7 @@ static inline struct dma_cb1 *build1step(struct stepper_priv *priv, struct dma_c
 	}
 
 /* build DMA control blocks, pass in destination pCB, returns number of steps built or 0 */
-static noinline int build_dma_thread(struct stepper_priv *priv, int motor, struct dma_cb1 *pCbs, int flag)
+static NOINLINE int build_dma_thread(struct stepper_priv *priv, int motor, struct dma_cb1 *pCbs, int flag)
 	{
 	struct STEPPER_SETUP *p_cmd = &priv->step_cmd[motor];
 	struct pwm_dma_data *dma_send_buf = priv->dma_send_buf;

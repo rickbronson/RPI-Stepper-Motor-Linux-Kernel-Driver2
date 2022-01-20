@@ -99,6 +99,10 @@ struct STEPPER_SETUP
 	};
 
 #define MAX_MOTORS 2 /* max number of motors we'll drive */
-#define MAX_STEPS 3000  /* NOTE: with 2 and 8192 we go over df3fffc0 which seems to cause an issue */
+#if MAX_MOTORS > 2
+#define MAX_STEPS 3000
+#else
+#define MAX_STEPS 4500  /* if we only have 2 motors then this can be larger */
+#endif
 #define RPI4_CRYSTAL_FREQ 54000000
 #define PWM_FREQ (RPI4_CRYSTAL_FREQ / 2)  /* set for max granularity */
