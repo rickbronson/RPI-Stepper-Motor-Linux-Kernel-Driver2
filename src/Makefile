@@ -1,4 +1,5 @@
 # Makefile for kernel module and test program
+LLIBS      =-lc -lgcc -lpthread
 
 all:	driver test-stepper
 
@@ -14,7 +15,7 @@ clean:
 
 test-stepper:	test-stepper.c rpi4-stepper.h
 	gcc -Wa,-alh,-L -c $@.c -o $@.o > $@.lis
-	gcc -o $@ $@.o
+	gcc -o $@ $@.o $(LLIBS)
 
 mpu6050:	mpu6050.c
 	gcc -ggdb -g -Wa,-alh,-L -c $@.c -o $@.o > $@.lis

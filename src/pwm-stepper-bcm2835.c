@@ -651,12 +651,6 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 			flag = USE_DMA_BUF;
 			}
 		build_steps = build_dma_thread(priv, cntr, build_cbsA, flag);
-		if (build_steps <= 0) {  /* did build fail? */
-			report_debug("4");
-			printk(KERN_ERR "pwm-stepper build error\n");
-			count = -EINVAL;  /* error */
-			goto bail;
-			}
 		build_cbsA = priv->build_cbs1;  /* from now on, build in cbs1 */
 		if (cntr == 0)
 			continue;  /* don't combine on the first one */

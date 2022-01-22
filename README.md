@@ -102,8 +102,7 @@ cd ~/RPI-Stepper-Motor-Linux-Kernel-Driver2/src
 sudo rmmod pwm-bcm2835  # remove existing driver if any
 sudo rmmod pwm-stepper-bcm2835 # remove our driver if it's already installed
 sudo insmod ./pwm-stepper-bcm2835.ko
-sudo test-stepper -d 500 -s 4000 -r 1 -m 7  # move 500 microsteps
-sudo test-stepper -d 500 -s 4000 -r 3 -m 7  # same, more aggressive curve
+sudo test-stepper -d 500 -s 4000 -m 7  # move 500 microsteps
 ```
 
   I tested my motor up to 215000 Hz (without load) at "-m 7" and it worked well.
