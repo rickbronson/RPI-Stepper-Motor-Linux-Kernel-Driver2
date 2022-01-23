@@ -430,7 +430,7 @@ static NOINLINE void setup_pwm(struct stepper_priv *priv)
 	struct S_PWM_REGS *pwm_regs = priv->pwm_regs;
 
 	/* Set up PWM */
-	pwm_regs->control.ctl = 0;  /* reset PWM */
+	pwm_regs->control.ctl = PWM_CTL_CLRF1;  /* clear PWM fifo NOTE: Seems like if you write to register right in a row, you need to have a udelay(10)  */
 //	udelay(10);
 
 	pwm_regs->sta = -1;
@@ -439,9 +439,6 @@ static NOINLINE void setup_pwm(struct stepper_priv *priv)
 	/* enable PWM DMA, raise panic and dreq thresholds to 1 NOTE: setting DREQ(X) will causse
 (X+3)/2 glitch cycles (~650 KHz) to come out before our waveform starts */
 	pwm_regs->dmac = PWM_DMAC_ENAB | PWM_DMAC_PANIC(15) | PWM_DMAC_DREQ(PWM_DMAC_DREQ_VAL);
-//	udelay(10);
-
-	pwm_regs->control.ctl = PWM_CTL_CLRF1;  /* clear PWM fifo */
 //	udelay(10);
 
 	/* enable PWM channel 1 and use fifo */
@@ -455,7 +452,6 @@ static NOINLINE void start_dma(struct stepper_priv *priv, struct dma_cb1 *pCbs)
 
 	priv->timer_save = *priv->system_timer_regs;  /* save current timer */
 	priv->dma_regs->cs = DMA_CHANNEL_RESET;  /* reset DMA */
-	priv->pwm_regs->control.ctl = PWM_CTL_CLRF1;  /* clear PWM fifo */
 
 	setup_pwm(priv);
 	/* we need to prime the range or we end up with the previous range from the last transfer for the 1st step */
@@ -605,9 +601,11 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 
 	ret = wait_event_interruptible_timeout(priv->wait_q, priv->state == STEPPER_STATE_IDLE, msecs_to_jiffies(50));
 	if (!ret)
-		return -ETIMEDOUT;
-	if (ret < 0)
-		return ret; /* got a signal */
+		ret = -ETIMEDOUT;
+	if (ret < 0) {
+		priv->state = STEPPER_STATE_IDLE;
+		return ret; /* got a signal or timeout */
+		}
 	priv->state = STEPPER_STATE_BUSY;
 		
 	timer_save = *priv->system_timer_regs;  /* save current timer */
@@ -615,7 +613,7 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 		{  /* this is a new motor, request gpio's */
 		priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] = priv->motors++;  /* set this motor */
 		/* Set the GPIO pins */
-//		PRINTI("pwm-stepper debug microstep_control = %d, step = %d, motor = %d\n", p_cmd->microstep_control, p_cmd->gpios[GPIO_STEP], priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]);
+		PRINTI("pwm-stepper debug microstep_control = %d, step = %d, motor = %d\n", p_cmd->microstep_control, p_cmd->gpios[GPIO_STEP], priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]);
 		ret = request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP0], p_cmd->microstep_control >> 0);
 		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP1], p_cmd->microstep_control >> 1);
 		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP2], p_cmd->microstep_control >> 2);
@@ -639,12 +637,13 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 	else
 		next_dma_buf = priv->dma_send_buf->run_cbs1;
 	for (last_motor = 0, cntr = 0; cntr < priv->motors; cntr++)  /* find last motor */
-		if (priv->step_cmd[cntr].speed != 0)
-			last_motor = cntr;  /* count only motors with speed */
+		if (priv->step_cmd[cntr].speed && priv->step_cmd[cntr].distance)
+			last_motor = cntr;  /* count only motors with speed and distance */
 
 	for (cntr = 0; cntr < priv->motors; cntr++) {  /* go thru all motors and build/combine */
-		if (priv->step_cmd[cntr].speed == 0)  /* skip if no speed */
-			continue;
+		PRINTI("pwm-stepper step_cmd_write motor = %d speed %d distance %d\n", priv->gpio2motor[priv->step_cmd[cntr].gpios[GPIO_STEP]], priv->step_cmd[cntr].speed, priv->step_cmd[cntr].distance);
+		if (!priv->step_cmd[cntr].speed || !priv->step_cmd[cntr].distance)
+			continue;  /* skip if no speed or distance */
 		flag = USE_BUILD_BUF;
 		if (cntr == last_motor && cntr == 0) {
 			build_cbsA = next_dma_buf;
@@ -675,9 +674,10 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 #endif
 		}
 	PRINTI("pwm-stepper write time %d us\n", *priv->system_timer_regs - timer_save);
-
-	start_dma(priv, next_dma_buf);
-	report_debug("G");  /* everything AOK */
+	if (build_steps) {
+		start_dma(priv, next_dma_buf);
+		report_debug("G");  /* everything AOK */
+		}
 bail:
 	priv->state = STEPPER_STATE_IDLE;
 	wake_up_interruptible(&priv->wait_q);

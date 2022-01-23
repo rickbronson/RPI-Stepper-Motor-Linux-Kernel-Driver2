@@ -36,6 +36,8 @@ typedef int			s32;
 typedef long long		s64;
 #include "rpi4-stepper.h"
 
+#define ARRAY_SIZE(s) (sizeof(s) / sizeof(*s))
+
 struct dma_cb3 {  /* to make it easier to deal with 3 control blocks that entail one time delay */
 	u32 info1;
 	u32 *src1;  /* pointer to GPIO value */
@@ -348,7 +350,7 @@ static void *usr_rcv_thread(struct stepper_priv *priv)
  */
 int main(int argc,char **argv) {
   int next_option;
-	int err, parse = 0, loop_cntr, steps, msdelay = 0, loop = 1;
+	int err, parse = 0, cntr, loop_cntr, steps, msdelay = 0, loop = 1;
 	struct stepper_priv *priv = &priv_data;
 	int system_timer_regs;
 	struct timespec ts = { 0, 5000000 };
@@ -372,7 +374,6 @@ int main(int argc,char **argv) {
     return(err);
     }
 
-	memcpy(&priv->step_cmd, setup, sizeof(struct STEPPER_SETUP));
   do
     {
     next_option = getopt_long (argc, argv, short_options,
@@ -380,21 +381,28 @@ int main(int argc,char **argv) {
     switch (next_option)
       {
       case 'd':   /* -d or --distance */
-        priv->step_cmd.distance = strtol (optarg, NULL, 0);
+        for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+					setup[cntr].distance = strtol (optarg, NULL, 0);
         break;
       case 's':   /* -s or --speed */
-        priv->step_cmd.speed = strtoul (optarg, NULL, 0);
-				if (priv->step_cmd.speed > 250000)
+				if (strtoul (optarg, NULL, 0) > 250000) {
 					printf("Warning: Speed of over 250000 is outside the spec of most motor drivers\n");
-        break;
+					exit;
+					}
+				for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+					setup[cntr].speed = strtoul (optarg, NULL, 0);
+				break;
       case 'm':   /* -m or --microstep */
-				priv->step_cmd.microstep_control = strtoul (optarg, NULL, 0);
+				for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+					setup[cntr].microstep_control = strtoul (optarg, NULL, 0);
         break;
       case 'p':   /* -p or --step_gpio */
-				priv->step_cmd.gpios[GPIO_STEP] = strtoul (optarg, NULL, 0);
+				for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+					setup[cntr].gpios[GPIO_STEP] = strtoul (optarg, NULL, 0);
         break;
       case 'i':   /* -i or --dir_gpio */
-				priv->step_cmd.gpios[GPIO_DIRECTION] = strtoul (optarg, NULL, 0);
+				for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+					setup[cntr].gpios[GPIO_DIRECTION] = strtoul (optarg, NULL, 0);
         break;
       case 'l':   /* -l or --loop */
         loop = strtoul (optarg, NULL, 0);
@@ -438,11 +446,7 @@ int main(int argc,char **argv) {
 	for (loop_cntr = 0; loop_cntr < loop; loop_cntr++) {
 		lseek(priv->fd, 0, SEEK_SET);
 		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO);
-		if (loop_cntr) {  /* don't copy on first one since they may have overwritten from command line options */
-			memcpy(&priv->step_cmd, &setup[loop_cntr % MAX_MOTORS], sizeof(struct STEPPER_SETUP));
-			}
-//		if (priv->verbose)
-//			printf("gpio = %d, distance = %d\n", priv->step_cmd.gpios[GPIO_STEP], priv->step_cmd.distance);
+		memcpy(&priv->step_cmd, &setup[loop_cntr % MAX_MOTORS], sizeof(struct STEPPER_SETUP));
 		if (write(priv->fd, &priv->step_cmd, sizeof(priv->step_cmd)) != sizeof(priv->step_cmd)) {
 			perror(STEP_CMD_FILE);
 			exit(1);
