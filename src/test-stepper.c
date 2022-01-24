@@ -20,6 +20,7 @@ cd ~/src; while true; do sudo ~/src/test-stepper -d 400 -n 500 -s 500 -m 7 -i 16
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+int pthread_tryjoin_np(pthread_t thread, void **retval);
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -109,10 +110,14 @@ void print_usage (FILE* stream, int exit_code)
 struct stepper_priv {
 	struct STEPPER_SETUP step_cmd;
 	int verbose;
+	int loop;
 	int last_range[32];
-	int write_calls;
-	pthread_t usr_rcv_thread_id;
-  pthread_attr_t attr2;
+	pthread_mutex_t mutex;  /* Protects critical region */
+	pthread_mutexattr_t attr1;
+	int write_calls[MAX_MOTORS];
+	pthread_t write_thread_id[MAX_MOTORS];
+  pthread_attr_t attr[MAX_MOTORS];
+	int msdelay;
 	int get_status;
 	int fd;
 	} priv_data = {0};
@@ -300,80 +305,67 @@ static int parse_cbs(struct stepper_priv *priv, off_t parse)
   return 0;
 	}
 
-static void *usr_rcv_thread(struct stepper_priv *priv)
+static void *write_thread(int motor)  /* one for each motor */
   {
-  pthread_attr_t  attr3 = {0};
+  pthread_attr_t  attr = {0};
   int pol = SCHED_FIFO;
-  int rc, write_calls_save = 0;
-	struct timespec ts = { 1, 0 };
-  
-  rc = pthread_attr_init( &attr3 );
+  int loop_cntr, rc;
+	int system_timer_regs;
+	struct timespec ts = { 0, 5000000 };
+	struct stepper_priv *priv = &priv_data;
+	struct STEPPER_SETUP step_cmd;
+	struct STEPPER_SETUP *p_cmd = &step_cmd;
+
+  rc = pthread_attr_init( &attr );
   if ( rc == -1 ) 
     {
     perror( "pthread_attr_init()" ) ;
     return( (void *)errno ) ;
     }
-  rc = pthread_attr_getschedpolicy( &attr3, &pol );
+  rc = pthread_attr_getschedpolicy(&attr, &pol);
 
   if ( rc == -1 )
     {
-    perror( "pthread_attr_getschedpolicy()" ) ;
-    return( (void *)errno ) ;
+    perror("pthread_attr_getschedpolicy()");
+    return((void *)errno) ;
     }
 
-	if (priv->verbose)
-		{
-		printf ("started usr_rcv_thread\n");
+	if (priv->verbose) {
+		printf ("started write_thread%d\n", motor);
 		}
-  while (1)
-    {
-    if (priv->verbose)
-      {
-			if (priv->get_status) {
-				if (read(priv->fd, &priv->step_cmd, sizeof(priv->step_cmd)) != sizeof(priv->step_cmd)) {
-					perror(STEP_CMD_FILE);
-					close(priv->fd);
-					exit(1);
-					}
-				printf("write calls = %d DMA status reg = 0x%08x\n", priv->write_calls - write_calls_save, priv->step_cmd.status);
-				}
-			else
-				printf ("write calls = %d\n", priv->write_calls - write_calls_save);
-			write_calls_save = priv->write_calls;
-      }
+	memcpy(p_cmd, &setup[motor], sizeof(struct STEPPER_SETUP));
+	for (loop_cntr = 0; loop_cntr < priv->loop; loop_cntr++) {
+		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO);
+
+		pthread_mutex_lock(&priv->mutex);
+		lseek(priv->fd, 0, SEEK_SET);
+//		if (priv->verbose)
+//			printf("gpio = %d, distance = %d, speed = %d msdelay %d\n", p_cmd->gpios[GPIO_STEP], p_cmd->distance, p_cmd->speed, priv->msdelay);
+		if (write(priv->fd, p_cmd, sizeof(*p_cmd)) != sizeof(*p_cmd)) {
+			perror(STEP_CMD_FILE);
+			exit(1);
+			}
+		pthread_mutex_unlock(&priv->mutex);
+		priv->write_calls[motor]++;
+		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO) - system_timer_regs;
+//		if (priv->verbose)
+//			printf("write time = %d us\n", system_timer_regs);
+		/* delay in milliseconds */
+		ts.tv_nsec = (priv->msdelay % 1000) * 1000 * 1000;
+		ts.tv_sec = priv->msdelay / 1000;
 		nanosleep(&ts, NULL);
-    }
-  return( (void *)0 ) ;
+		}
+  return((void *) 0) ;
   }
 /*
  * Main program:
  */
 int main(int argc,char **argv) {
   int next_option;
-	int err, parse = 0, cntr, loop_cntr, steps, msdelay = 0, loop = 1;
+	int err, parse = 0, cntr, steps, write_calls_total, write_calls_save[MAX_MOTORS] = {0};
 	struct stepper_priv *priv = &priv_data;
-	int system_timer_regs;
-	struct timespec ts = { 0, 5000000 };
+	struct timespec ts = { 1, 0 };
 	
-  err = pthread_attr_init( &priv->attr2 );
-  if ( err == -1 ) 
-    {
-    perror( "pthread_attr_init()" ) ;
-    return( errno ) ;
-    }
-  err = pthread_attr_setschedpolicy( &priv->attr2, SCHED_FIFO );
-  
-  if ( err == -1 ) 
-    {
-    perror( "pthread_attr_setschedpolicy()" ) ;
-    return( errno ) ;
-    }
-  if ((err = pthread_create (&priv->usr_rcv_thread_id, &priv->attr2, (void *) usr_rcv_thread, priv)) != 0)
-    {
-    printf("Create error!\n");
-    return(err);
-    }
-
   do
     {
     next_option = getopt_long (argc, argv, short_options,
@@ -381,7 +373,11 @@ int main(int argc,char **argv) {
     switch (next_option)
       {
       case 'd':   /* -d or --distance */
-        for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
+				if (abs(setup[cntr].distance) > MAX_STEPS / MAX_MOTORS) {
+					printf("Exceeding distance > %d max steps\n", MAX_STEPS / MAX_MOTORS);
+					exit;
+					}
+				for (cntr = 0; cntr < ARRAY_SIZE(setup); cntr++)
 					setup[cntr].distance = strtol (optarg, NULL, 0);
         break;
       case 's':   /* -s or --speed */
@@ -405,13 +401,13 @@ int main(int argc,char **argv) {
 					setup[cntr].gpios[GPIO_DIRECTION] = strtoul (optarg, NULL, 0);
         break;
       case 'l':   /* -l or --loop */
-        loop = strtoul (optarg, NULL, 0);
+        priv->loop = strtoul (optarg, NULL, 0);
         break;
       case 'a':   /* -a or --parse */
         parse = strtoul (optarg, NULL, 0) & PA_MASK;
         break;
       case 'y':   /* -y or --delay */
-        msdelay = strtol (optarg, NULL, 0);
+        priv->msdelay = strtol (optarg, NULL, 0);
         break;
       case 't':   /* -t or --status */
         priv->get_status = 1;
@@ -435,6 +431,27 @@ int main(int argc,char **argv) {
   if (priv->verbose)
     printf ("RPI4 PWM motor driver tester\n");
 
+	pthread_mutex_init(&priv->mutex, &priv->attr1);
+  for (cntr = 0; cntr < MAX_MOTORS; cntr++) {
+		err = pthread_attr_init( &priv->attr[cntr] );
+		if ( err == -1 ) 
+			{
+			perror( "pthread_attr_init()" ) ;
+			return( errno ) ;
+			}
+		err = pthread_attr_setschedpolicy( &priv->attr[cntr], SCHED_FIFO );
+  
+		if ( err == -1 ) 
+			{
+			perror( "pthread_attr_setschedpolicy()" ) ;
+			return( errno ) ;
+			}
+		if ((err = pthread_create (&priv->write_thread_id[cntr], &priv->attr[cntr], (void *) write_thread, (void *) cntr)) != 0)
+			{
+			printf("Create error!\n");
+			return(err);
+			}
+		}
 	if (parse) {
 		return(parse_cbs(priv, (off_t) parse));
 		}
@@ -443,24 +460,31 @@ int main(int argc,char **argv) {
 		perror(STEP_CMD_FILE);
 		exit(1);
 	}
-	for (loop_cntr = 0; loop_cntr < loop; loop_cntr++) {
-		lseek(priv->fd, 0, SEEK_SET);
-		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO);
-		memcpy(&priv->step_cmd, &setup[loop_cntr % MAX_MOTORS], sizeof(struct STEPPER_SETUP));
-		if (write(priv->fd, &priv->step_cmd, sizeof(priv->step_cmd)) != sizeof(priv->step_cmd)) {
-			perror(STEP_CMD_FILE);
-			exit(1);
-			}
-		priv->write_calls++;
-		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO) - system_timer_regs;
-//		if (priv->verbose)
-//			printf("write time = %d us\n", system_timer_regs);
-		/* delay in milliseconds */
-		ts.tv_nsec = (msdelay % 1000) * 1000 * 1000;
-		ts.tv_sec = msdelay / 1000;
-//		if (priv->verbose)
-//			printf("tv_nsec = %d, tv_sec = %d\n", ts.tv_nsec, ts.tv_sec);
+  while (1)
+    {
+    if (priv->verbose)
+      {
+			for (cntr = 0, write_calls_total = 0; cntr < MAX_MOTORS; cntr++) {
+				write_calls_total += priv->write_calls[cntr] - write_calls_save[cntr];
+				write_calls_save[cntr] = priv->write_calls[cntr];
+				}
+			if (priv->get_status) {
+				if (read(priv->fd, &priv->step_cmd, sizeof(priv->step_cmd)) != sizeof(priv->step_cmd)) {
+					perror(STEP_CMD_FILE);
+					close(priv->fd);
+					exit(1);
+					}
+				printf("write calls = %d DMA status reg = 0x%08x\n", write_calls_total, priv->step_cmd.status);
+				}
+			else
+				printf ("write calls = %d\n", write_calls_total);
+      }
 		nanosleep(&ts, NULL);
+		for (err = 0, cntr = 0; cntr < MAX_MOTORS; cntr++) {
+			err |= pthread_tryjoin_np(priv->write_thread_id[cntr], NULL); /* succeeds (returns 0) if and only if the thread has exited. */
+			}
+		if (!err)
+			break;
 		}
 	close(priv->fd);
 	return 0;

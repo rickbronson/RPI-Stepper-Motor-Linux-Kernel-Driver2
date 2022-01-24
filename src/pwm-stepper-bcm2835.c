@@ -626,7 +626,7 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 			}
 		}
 	if (abs(p_cmd->distance) > MAX_STEPS / priv->motors) {
-		printk(KERN_ERR "pwm-stepper Exceeding size of %d max steps\n", MAX_STEPS / priv->motors);
+		printk(KERN_ERR "pwm-stepper distance %d exceeding size of (%d / %d) motors\n", abs(p_cmd->distance), MAX_STEPS, priv->motors);
 		count = -EINVAL;
 		goto bail;
 		}

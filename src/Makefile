@@ -14,7 +14,7 @@ clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
 test-stepper:	test-stepper.c rpi4-stepper.h
-	gcc -Wa,-alh,-L -c $@.c -o $@.o > $@.lis
+	gcc -ggdb -g -Wa,-alh,-L -c $@.c -o $@.o > $@.lis
 	gcc -o $@ $@.o $(LLIBS)
 
 mpu6050:	mpu6050.c
