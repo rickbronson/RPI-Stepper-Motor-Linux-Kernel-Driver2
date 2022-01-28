@@ -1,7 +1,7 @@
   Raspberry PI 4 Stepper Motor Linux Kernel Driver Version 2
 ==========================================
 
-NOTE: This is very much like the version one driver except it leaves the ramping up/down to you.  It's intended that you call the driver at a pretty high rate (60 - 250Hz) and you will be doing all the fine control over ramping up and down.  When you call down to the driver and set the speed, it sets the speed to that value and does not attempt to ramp up or down over the distance you specify.  You need to specify the distance only in so far as to 1) make sure you don't set it too long such that the build time exceeds the period that you are calling into the dirver and 2) specify it long enough such that it doesn't finish the distance before you call into the driver with your next command.
+NOTE: This is very much like the version one driver except it leaves the ramping up/down to you.  Another change is that you send down all motors info in one call. It's intended that you call the driver at a pretty high rate (60 - 250Hz) and you will be doing all the fine control over ramping up and down.  When you call down to the driver and set the speed, it sets the speed to that value and does not attempt to ramp up or down over the distance you specify.  You need to specify the distance only in so far as to 1) make sure you don't set it too long such that the build time exceeds the period that you are calling into the dirver and 2) specify it long enough such that it doesn't finish the distance before you call into the driver with your next command.
 
 This is everything you need to build a stepper motor driver for the Raspberry PI 4 that is a real Linux kernel module.
 

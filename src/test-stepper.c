@@ -108,111 +108,45 @@ void print_usage (FILE* stream, int exit_code)
 }
 
 struct stepper_priv {
-	struct STEPPER_SETUP step_cmd;
+	struct STEPPER_SETUP step_cmd[MAX_MOTORS];
+	struct STEPPER_SETUP step_cmd_rd;
 	int verbose;
+	int main_loop_cntr;
 	int loop;
 	int last_range[32];
-	pthread_mutex_t mutex;  /* Protects critical region */
-	pthread_mutexattr_t attr1;
-	int write_calls[MAX_MOTORS];
-	pthread_t write_thread_id[MAX_MOTORS];
-  pthread_attr_t attr[MAX_MOTORS];
+	int write_calls;
+	pthread_t write_thread_id;
+  pthread_attr_t attr;
 	int msdelay;
 	int get_status;
 	int fd;
 	} priv_data = {0};
 
 #define DEFAULT_AGGRESSIVENESS 10  /* lower 8 bits treated as a fractions */
-struct STEPPER_SETUP setup[] =
+struct STEPPER_SETUP setup[MAX_MOTORS] =
 	{
-	{
-	.distance = 20,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 777,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_13,
-	.gpios[GPIO_DIRECTION] = GPIO_06,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = 20,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 500,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_12,
-	.gpios[GPIO_DIRECTION] = GPIO_16,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = 1,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 666,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_13,
-	.gpios[GPIO_DIRECTION] = GPIO_06,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = -2,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 555,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_12,
-	.gpios[GPIO_DIRECTION] = GPIO_16,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = 1,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 600,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_13,
-	.gpios[GPIO_DIRECTION] = GPIO_06,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = 1,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 650,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_12,
-	.gpios[GPIO_DIRECTION] = GPIO_16,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = -7,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 700,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_13,
-	.gpios[GPIO_DIRECTION] = GPIO_06,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
-	{
-	.distance = 0,  /* in steps NOTE: signed, 
-										pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
-	.speed = 650,  /* max speed in steps/second NOTE: if = 0 then stop */
-	.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
-	.gpios[GPIO_STEP] = GPIO_12,
-	.gpios[GPIO_DIRECTION] = GPIO_16,
-	.gpios[GPIO_MICROSTEP0] = GPIO_19,
-	.gpios[GPIO_MICROSTEP1] = GPIO_20,
-	.gpios[GPIO_MICROSTEP2] = GPIO_21,
-	},
+		{
+		.distance = 20,  /* in steps NOTE: signed, 
+												pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
+		.speed = 777,  /* max speed in steps/second NOTE: if = 0 then stop */
+		.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
+		.gpios[GPIO_STEP] = GPIO_13,
+		.gpios[GPIO_DIRECTION] = GPIO_06,
+		.gpios[GPIO_MICROSTEP0] = GPIO_19,
+		.gpios[GPIO_MICROSTEP1] = GPIO_20,
+		.gpios[GPIO_MICROSTEP2] = GPIO_21,
+		},
+		{
+		.distance = 20,  /* in steps NOTE: signed, 
+												pos = DIR pin high, neg = DIR pin low NOTE: if = 0 then stop */
+		.speed = 500,  /* max speed in steps/second NOTE: if = 0 then stop */
+		.microstep_control = 7,  /* bit 0 is value for gpio_microstep0, bit 1 = microstep1, etc */
+		.gpios[GPIO_STEP] = GPIO_12,
+		.gpios[GPIO_DIRECTION] = GPIO_16,
+		.gpios[GPIO_MICROSTEP0] = GPIO_19,
+		.gpios[GPIO_MICROSTEP1] = GPIO_20,
+		.gpios[GPIO_MICROSTEP2] = GPIO_21,
+		},
 	};
 
 #define MAP_SIZE 4096UL
@@ -308,13 +242,12 @@ static int parse_cbs(struct stepper_priv *priv, off_t parse)
 static void *write_thread(int motor)  /* one for each motor */
   {
   pthread_attr_t  attr = {0};
-  int pol = SCHED_FIFO;
-  int loop_cntr, rc;
-	int system_timer_regs;
 	struct timespec ts = { 0, 5000000 };
 	struct stepper_priv *priv = &priv_data;
-	struct STEPPER_SETUP step_cmd;
-	struct STEPPER_SETUP *p_cmd = &step_cmd;
+	struct STEPPER_SETUP step_cmd[MAX_MOTORS];
+	struct STEPPER_SETUP *p_cmd = step_cmd;
+  int pol = SCHED_FIFO;
+  int main_loop_save, loop_cntr, rc, system_timer_regs, last_ticks = 0, ideal_hz = 1000 / priv->msdelay;
 
   rc = pthread_attr_init( &attr );
   if ( rc == -1 ) 
@@ -330,29 +263,34 @@ static void *write_thread(int motor)  /* one for each motor */
     return((void *)errno) ;
     }
 
+	ts.tv_nsec = (priv->msdelay % 1000) * 1000 * 1000;
+	ts.tv_sec = priv->msdelay / 1000;
+
 	if (priv->verbose) {
 		printf ("started write_thread%d\n", motor);
 		}
-	memcpy(p_cmd, &setup[motor], sizeof(struct STEPPER_SETUP));
+	memcpy(p_cmd, setup, sizeof(struct STEPPER_SETUP) * MAX_MOTORS);
 	for (loop_cntr = 0; loop_cntr < priv->loop; loop_cntr++) {
 		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO);
 
-		pthread_mutex_lock(&priv->mutex);
 		lseek(priv->fd, 0, SEEK_SET);
 //		if (priv->verbose)
 //			printf("gpio = %d, distance = %d, speed = %d msdelay %d\n", p_cmd->gpios[GPIO_STEP], p_cmd->distance, p_cmd->speed, priv->msdelay);
-		if (write(priv->fd, p_cmd, sizeof(*p_cmd)) != sizeof(*p_cmd)) {
+		if (write(priv->fd, p_cmd, sizeof(*p_cmd) * MAX_MOTORS) != sizeof(*p_cmd) * MAX_MOTORS) {
 			perror(STEP_CMD_FILE);
 			exit(1);
 			}
-		pthread_mutex_unlock(&priv->mutex);
-		priv->write_calls[motor]++;
+		priv->write_calls++;
+		if (priv->main_loop_cntr && main_loop_save != priv->main_loop_cntr) {  /* adjust timing but not on first pass */
+			last_ticks = priv->write_calls - last_ticks;
+			ts.tv_nsec += (last_ticks - ideal_hz) * (1000 * 1000 / 1000);  /* about 0.1% per second */
+			main_loop_save = priv->main_loop_cntr;
+			last_ticks = priv->write_calls;
+			}
 		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO) - system_timer_regs;
 //		if (priv->verbose)
 //			printf("write time = %d us\n", system_timer_regs);
 		/* delay in milliseconds */
-		ts.tv_nsec = (priv->msdelay % 1000) * 1000 * 1000;
-		ts.tv_sec = priv->msdelay / 1000;
 		nanosleep(&ts, NULL);
 		}
   return((void *) 0) ;
@@ -362,7 +300,7 @@ static void *write_thread(int motor)  /* one for each motor */
  */
 int main(int argc,char **argv) {
   int next_option;
-	int err, parse = 0, cntr, steps, write_calls_total, write_calls_save[MAX_MOTORS] = {0};
+	int err, parse = 0, cntr, steps, write_calls_total, write_calls_save = {0};
 	struct stepper_priv *priv = &priv_data;
 	struct timespec ts = { 1, 0 };
 	
@@ -431,26 +369,23 @@ int main(int argc,char **argv) {
   if (priv->verbose)
     printf ("RPI4 PWM motor driver tester\n");
 
-	pthread_mutex_init(&priv->mutex, &priv->attr1);
-  for (cntr = 0; cntr < MAX_MOTORS; cntr++) {
-		err = pthread_attr_init( &priv->attr[cntr] );
-		if ( err == -1 ) 
-			{
-			perror( "pthread_attr_init()" ) ;
-			return( errno ) ;
-			}
-		err = pthread_attr_setschedpolicy( &priv->attr[cntr], SCHED_FIFO );
+	err = pthread_attr_init( &priv->attr );
+	if ( err == -1 ) 
+		{
+		perror( "pthread_attr_init()" ) ;
+		return( errno ) ;
+		}
+	err = pthread_attr_setschedpolicy( &priv->attr, SCHED_FIFO );
   
-		if ( err == -1 ) 
-			{
-			perror( "pthread_attr_setschedpolicy()" ) ;
-			return( errno ) ;
-			}
-		if ((err = pthread_create (&priv->write_thread_id[cntr], &priv->attr[cntr], (void *) write_thread, (void *) cntr)) != 0)
-			{
-			printf("Create error!\n");
-			return(err);
-			}
+	if ( err == -1 ) 
+		{
+		perror( "pthread_attr_setschedpolicy()" ) ;
+		return( errno ) ;
+		}
+	if ((err = pthread_create (&priv->write_thread_id, &priv->attr, (void *) write_thread, (void *) cntr)) != 0)
+		{
+		printf("Create error!\n");
+		return(err);
 		}
 	if (parse) {
 		return(parse_cbs(priv, (off_t) parse));
@@ -464,27 +399,24 @@ int main(int argc,char **argv) {
     {
     if (priv->verbose)
       {
-			for (cntr = 0, write_calls_total = 0; cntr < MAX_MOTORS; cntr++) {
-				write_calls_total += priv->write_calls[cntr] - write_calls_save[cntr];
-				write_calls_save[cntr] = priv->write_calls[cntr];
-				}
+			write_calls_total = priv->write_calls - write_calls_save;
+			write_calls_save = priv->write_calls;
 			if (priv->get_status) {
-				if (read(priv->fd, &priv->step_cmd, sizeof(priv->step_cmd)) != sizeof(priv->step_cmd)) {
+				if (read(priv->fd, &priv->step_cmd_rd, sizeof(priv->step_cmd_rd)) != sizeof(priv->step_cmd_rd)) {
 					perror(STEP_CMD_FILE);
 					close(priv->fd);
 					exit(1);
 					}
-				printf("write calls = %d DMA status reg = 0x%08x\n", write_calls_total, priv->step_cmd.status);
+				printf("write calls = %d DMA status reg = 0x%08x\n", write_calls_total, priv->step_cmd_rd.status);
 				}
 			else
 				printf ("write calls = %d\n", write_calls_total);
       }
 		nanosleep(&ts, NULL);
-		for (err = 0, cntr = 0; cntr < MAX_MOTORS; cntr++) {
-			err |= pthread_tryjoin_np(priv->write_thread_id[cntr], NULL); /* succeeds (returns 0) if and only if the thread has exited. */
-			}
+		err = pthread_tryjoin_np(priv->write_thread_id, NULL); /* succeeds (returns 0) if and only if the thread has exited. */
 		if (!err)
 			break;
+		priv->main_loop_cntr++;
 		}
 	close(priv->fd);
 	return 0;

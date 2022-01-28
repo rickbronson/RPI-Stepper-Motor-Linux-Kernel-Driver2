@@ -609,28 +609,31 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 	priv->state = STEPPER_STATE_BUSY;
 		
 	timer_save = *priv->system_timer_regs;  /* save current timer */
-	if (priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] == NO_MOTOR)
-		{  /* this is a new motor, request gpio's */
-		priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] = priv->motors++;  /* set this motor */
-		/* Set the GPIO pins */
-		PRINTI("pwm-stepper debug microstep_control = %d, step = %d, motor = %d\n", p_cmd->microstep_control, p_cmd->gpios[GPIO_STEP], priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]);
-		ret = request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP0], p_cmd->microstep_control >> 0);
-		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP1], p_cmd->microstep_control >> 1);
-		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP2], p_cmd->microstep_control >> 2);
-		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_DIRECTION], p_cmd->distance >= 0 ? 1 : 0);
-		ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_STEP], 0);
-		if (ret) {
-			printk(KERN_ERR "pwm-stepper Requesting GPIO's that are already used\n");
-			count = -EBUSY;
+	for (cntr = 0; cntr < MAX_MOTORS; cntr++) {  /* go thru all motors */
+		if (priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] == NO_MOTOR)
+			{  /* this is a new motor, request gpio's */
+			priv->gpio2motor[p_cmd->gpios[GPIO_STEP]] = priv->motors++;  /* set this motor */
+			/* Set the GPIO pins */
+			PRINTI("pwm-stepper debug microstep_control = %d, step = %d, motor = %d\n", p_cmd->microstep_control, p_cmd->gpios[GPIO_STEP], priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]);
+			ret = request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP0], p_cmd->microstep_control >> 0);
+			ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP1], p_cmd->microstep_control >> 1);
+			ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_MICROSTEP2], p_cmd->microstep_control >> 2);
+			ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_DIRECTION], p_cmd->distance >= 0 ? 1 : 0);
+			ret |= request_set_gpio(priv, p_cmd->gpios[GPIO_STEP], 0);
+			if (ret) {
+				printk(KERN_ERR "pwm-stepper Requesting GPIO's that are already used\n");
+				count = -EBUSY;
+				goto bail;
+				}
+			}
+		if (abs(p_cmd->distance) > MAX_STEPS / priv->motors) {
+			printk(KERN_ERR "pwm-stepper distance %d exceeding size of (%d / %d) motors\n", abs(p_cmd->distance), MAX_STEPS, priv->motors);
+			count = -EINVAL;
 			goto bail;
 			}
+		memcpy(&priv->step_cmd[priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]], p_cmd, sizeof(struct STEPPER_SETUP));  /* save this command */
+		p_cmd++;  /* move to next motor */
 		}
-	if (abs(p_cmd->distance) > MAX_STEPS / priv->motors) {
-		printk(KERN_ERR "pwm-stepper distance %d exceeding size of (%d / %d) motors\n", abs(p_cmd->distance), MAX_STEPS, priv->motors);
-		count = -EINVAL;
-		goto bail;
-		}
-	memcpy(&priv->step_cmd[priv->gpio2motor[p_cmd->gpios[GPIO_STEP]]], buffer, count);  /* save this command */
 
 	if (next_dma_buf == priv->dma_send_buf->run_cbs1)  /* ping pong to other dma buffer */
 		next_dma_buf = priv->dma_send_buf->run_cbs2;
@@ -687,7 +690,7 @@ bail:
 /* shows up in /sys/devices/platform/stepper_plat/cmd */
 static const struct bin_attribute step_cmd_attr = {
 	.attr = {.name = "cmd", .mode = 0666},
-	.size = sizeof(struct STEPPER_SETUP),	/* Limit image size */
+	.size = sizeof(struct STEPPER_SETUP) * MAX_MOTORS,  /* Limit image size */
 	.write = step_cmd_write,
 	.read = step_cmd_read,
 };
