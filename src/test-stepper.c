@@ -120,7 +120,10 @@ struct stepper_priv {
 	int msdelay;
 	int get_status;
 	int fd;
-	} priv_data = {0};
+	} priv_data =
+	{
+	.msdelay = 20,  /* default msdelay so no divide by zero */
+	};
 
 #define DEFAULT_AGGRESSIVENESS 10  /* lower 8 bits treated as a fractions */
 struct STEPPER_SETUP setup[MAX_MOTORS] =

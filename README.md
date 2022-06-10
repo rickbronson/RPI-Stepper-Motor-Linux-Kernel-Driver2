@@ -67,6 +67,7 @@ uname -a  # should show a new kernel
   Now we need to tweaked a device tree file (NOTE: Only do this once!)
 
 ```
+cd ~/linux
 cat >> arch/arm/boot/dts/bcm270x.dtsi <<'EOF'
 &pwm {
       dmas = <&dma 5>;

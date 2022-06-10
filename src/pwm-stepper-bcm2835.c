@@ -722,7 +722,7 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct stepper_priv *priv;
 	struct resource *res;
-	struct irq_desc *desc;
+	struct irq_data *irq_data;
 	int virq, ret = 0;
 	void __iomem *pwm_regs;  /* base addr of PWM */
 
@@ -778,18 +778,23 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 		goto out4;
 		}
 
+/* Virtual irq to Hardware irq mapping (from experimentation) on RPI4:
+Vir: 0-16 17 18 19 20 21 22 23 24  25 26 27 28 29 30 31 32 33  34 35  36  37  38  39  40  41  42 43
+HW:   0    1  2  3  4  5  6  7 25 128 99 29 30 27 26 96 97 98 107 65 145 146 153 125 129 149 112
+*/
+
 #define DMA_CHANNEL 0  /* The channel we get from the last call, be nice to figure this out! */
-#define DMA_START_VIRQ_NUM (80 + 32)  /* 80 Gotten from "GIC_SPI 80..." in bcm2711.dtsi */
+#define DMA_START_VIRQ_NUM (80 + 32)  /* (112) 80 Gotten from "GIC_SPI 80..." in bcm2711.dtsi */
 	for (virq = 0; virq < 64; virq++) {  /* find our interrupt */
-		desc = irq_to_desc(virq);
-		if (desc->irq_data.hwirq == DMA_START_VIRQ_NUM + DMA_CHANNEL)
+		irq_data = irq_get_irq_data(virq);
+		if (irq_data->hwirq == DMA_START_VIRQ_NUM + DMA_CHANNEL)
 			break;
 		}
-	if (desc->irq_data.hwirq != DMA_START_VIRQ_NUM + DMA_CHANNEL) {
+	if (irq_data->hwirq != DMA_START_VIRQ_NUM + DMA_CHANNEL) {
 		printk(KERN_ERR "pwm-stepper can't find DMA interrupt %d\n", DMA_START_VIRQ_NUM + DMA_CHANNEL);
 		goto out5;
 		}
-	priv->irq_number = virq;
+	priv->irq_number = virq;  /* 42 on 5.10.92-v7l 38 on 5.15.45-v7l (from mapping above on old) */
 	priv->dma_regs = &priv->dma_regs[DMA_CHANNEL];  /* move to our reg's */
 	if (request_irq(priv->irq_number, bcm2835_dma_callback, 0, "Stepper DMA IRQ", priv)) {
 		printk(KERN_ERR "pwm-stepper request_irq %d failed\n", priv->irq_number);
