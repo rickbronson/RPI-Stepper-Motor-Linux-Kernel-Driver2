@@ -54,6 +54,8 @@ NOTE: need to blacklist pwm-bcm2835
 #include <linux/platform_data/dma-bcm2708.h>
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
+#include <linux/ktime.h>
+#include <linux/hrtimer.h>
 #include <linux/of_address.h>
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
@@ -131,6 +133,10 @@ MODULE_DESCRIPTION("Broadcom BCM2835 PWM for stepper motor driver");
 typedef enum {  /* for build_dma_thread() */
 	USE_DMA_BUF,
 	USE_BUILD_BUF,} BUILDTYPE;
+
+typedef enum {  /* for wait state */
+	TIMER_WAIT_IDLE_ST,
+	TIMER_WAIT_WAITING_ST,} WAITTYPE;
 
 typedef enum {  /* for waiting when busy */
 	STEPPER_STATE_IDLE,
@@ -319,6 +325,9 @@ struct stepper_priv {
 	int timer_save;
 	STATETYPE state;
 	wait_queue_head_t wait_q;
+	struct hrtimer high_res_timer;
+	wait_queue_head_t timer_wait_q;
+	WAITTYPE timer_wait_st;
 	};
 
 /* request one GPIO output, set to value */
@@ -593,7 +602,7 @@ static ssize_t step_cmd_write(struct file *filp, struct kobject *kobj,
 	int flag, timer_save, ret, build_steps = 0, combine_steps = 0, last_motor, cntr;
 	struct dma_cb1 *build_cbsA = priv->build_cbs2;
 	struct dma_cb1 *build_cbsB = priv->build_cbs2;
-	struct dma_cb1 *build_cbsC;
+	struct dma_cb1 *build_cbsC
 #if MAX_MOTORS > 2
  = priv->build_cbs3
 #endif
@@ -687,12 +696,51 @@ bail:
 	return count;
 	}
 
-/* shows up in /sys/devices/platform/stepper_plat/cmd */
+enum hrtimer_restart my_hrtimer_callback(struct hrtimer *timer)
+	{
+	struct stepper_priv *priv = container_of(timer, struct stepper_priv, high_res_timer);
+
+	priv->timer_wait_st = TIMER_WAIT_IDLE_ST;
+	wake_up_interruptible(&priv->timer_wait_q);
+	return HRTIMER_NORESTART;
+	}
+
+/* take a command from user space, for wait timer. Use hrtimer to wait. */
+static ssize_t step_timer_write(struct file *filp, struct kobject *kobj,
+				struct bin_attribute *bin_attr,
+				char *buffer, loff_t pos, size_t count)
+	{
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct stepper_priv *priv = dev_get_drvdata(dev);
+	struct STEPPER_WAIT *p_wait = (struct STEPPER_WAIT *) buffer;
+	int ret;
+
+	hrtimer_start(&priv->high_res_timer, p_wait->wait_time, HRTIMER_MODE_REL);
+	priv->timer_wait_st = TIMER_WAIT_WAITING_ST;
+	ret = wait_event_interruptible_timeout(priv->timer_wait_q,
+		priv->timer_wait_st == TIMER_WAIT_IDLE_ST, msecs_to_jiffies(50));
+	if (!ret)
+		ret = -ETIMEDOUT;
+	if (ret < 0) {
+		return ret; /* got a signal */
+		}
+
+	return count;
+	}
+
+/* shows up in /sys/devices/platform/soc/fe20c000.pwm/cmd */
 static const struct bin_attribute step_cmd_attr = {
 	.attr = {.name = "cmd", .mode = 0666},
 	.size = sizeof(struct STEPPER_SETUP) * MAX_MOTORS,  /* Limit image size */
 	.write = step_cmd_write,
 	.read = step_cmd_read,
+};
+
+/* shows up in /sys/devices/platform/soc/fe20c000.pwm/wait_timer */
+static const struct bin_attribute step_timer_attr = {
+	.attr = {.name = "wait_timer", .mode = 0222},
+	.size = sizeof(struct STEPPER_WAIT),  /* Limit image size */
+	.write = step_timer_write,
 };
 
 /*
@@ -732,6 +780,7 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 		}
 	init_waitqueue_head(&priv->wait_q);
+	init_waitqueue_head(&priv->timer_wait_q);
 	init_completion(&priv->dma_cmpl);
 	memset(priv->gpio2motor, NO_MOTOR, sizeof(priv->gpio2motor));  /* set to No Motor */
 	platform_set_drvdata(pdev, priv);
@@ -756,9 +805,15 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 
 	ret = sysfs_create_bin_file(&pdev->dev.kobj, &step_cmd_attr);
 	if (ret) {
-		printk(KERN_ERR "pwm-stepper: Failed to create sysfs files\n");
+		printk(KERN_ERR "pwm-stepper: Failed to create sysfs cmd file\n");
 		goto out3;
 	}
+	ret = sysfs_create_bin_file(&pdev->dev.kobj, &step_timer_attr);
+	if (ret) {
+		printk(KERN_ERR "pwm-stepper: Failed to create sysfs timer file\n");
+		goto out3;
+	}
+
 
 	/* Map the from PHYSICAL address space to VIRTUAL address space */
 	priv->pwm_clk_regs = ioremap(PWM_CLK_BASE, PAGE_SIZE);
@@ -811,6 +866,9 @@ HW:   0    1  2  3  4  5  6  7 25 128 99 29 30 27 26 96 97 98 107 65 145 146 153
 		goto out6;
 		}
 	pwm_frequency(priv, PWM_FREQ);
+	/* do high res timer init */
+	hrtimer_init(&priv->high_res_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	priv->high_res_timer.function = &my_hrtimer_callback;
 	return 0;
 
 out6:
@@ -819,6 +877,7 @@ out5:
 	dma_release_channel(priv->dma_chan_tx);
 out4:
 	sysfs_remove_bin_file(&pdev->dev.kobj, &step_cmd_attr);
+	sysfs_remove_bin_file(&pdev->dev.kobj, &step_timer_attr);
 out3:
 	clk_disable_unprepare(priv->clk);
 out2:
@@ -834,6 +893,7 @@ static int bcm2835_pwm_remove(struct platform_device *pdev)
 	struct stepper_priv *priv = platform_get_drvdata(pdev);
 	int ret = 0;
 
+	ret = hrtimer_cancel(&priv->high_res_timer);
 	dmaengine_terminate_all(priv->dma_chan_tx);
 	dma_free_coherent(&pdev->dev, priv->dma_size, priv->dma_send_buf, priv->dma_handle); 
 	free_irq(priv->irq_number, priv);  /* free our int and put his back */

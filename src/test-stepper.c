@@ -14,6 +14,8 @@ cd ~/src; while true; do sudo ~/src/test-stepper -l 2 -y 200; sleep 3; done
  - run 1st motor, 2nd motor, then both:
 cd ~/src; while true; do sudo ~/src/test-stepper -d 400 -n 500 -s 500 -m 7 -i 16 -p 12; sleep 1; sudo ~/src/test-stepper -l 1 -y 200; sleep 3; sudo ~/src/test-stepper -l 2 -y 200; sleep 3; done
 
+For wait timer test:
+while true; do sudo ./test-stepper -w 4000000 -l 4000 -v; done
  *********************************************************************/
 
 #include <getopt.h>
@@ -71,10 +73,11 @@ struct dma_cb3 {  /* to make it easier to deal with 3 control blocks that entail
 #define SYSTEM_TIMER_CLO (PERI_BASE + 0x00003004)  /* based on 1 MHz */
 
 #define STEP_CMD_FILE "/sys/devices/platform/soc/fe20c000.pwm/cmd"
+#define STEP_WAIT_FILE "/sys/devices/platform/soc/fe20c000.pwm/wait_timer"
 
 /* A string listing valid short options letters.  */
 const char* program_name;  /* The name of this program.  */
-const char* const short_options = "d:s:m:p:i:l:a:y:tv";
+const char* const short_options = "d:s:m:p:i:l:a:y:tw:v";
   /* An array describing valid long options.  */
 const struct option long_options[] = {
     { "distance",      1, NULL, 'd' },
@@ -86,6 +89,7 @@ const struct option long_options[] = {
     { "parse",     1, NULL, 'a' },
     { "delay",     1, NULL, 'y' },
     { "status",     0, NULL, 't' },
+    { "wait",     1, NULL, 'w' },
     { "verbose",   0, NULL, 'v' },
     { NULL,        0, NULL, 0   }   /* Required at end of array.  */
   };
@@ -103,6 +107,7 @@ void print_usage (FILE* stream, int exit_code)
            "  -a  --parse        Parse address of DMA Control Blocks\n"
            "  -y  --delay        Delay between loops in milliseconds\n"
            "  -t  --status       Get DMA status register\n"
+           "  -w  --wait         Wait for X nanoseconds before returning\n"
            "  -v  --verbose      Print verbose messages.\n");
   exit (exit_code);
 }
@@ -119,6 +124,7 @@ struct stepper_priv {
   pthread_attr_t attr;
 	int msdelay;
 	int get_status;
+	int wait_time;  /* in nano seconds */
 	int fd;
 	} priv_data =
 	{
@@ -298,6 +304,36 @@ static void *write_thread(int motor)  /* one for each motor */
 		}
   return((void *) 0) ;
   }
+
+/* wait timer function */
+void do_wait_timer(struct stepper_priv *priv) {
+	struct STEPPER_WAIT wait, *p_wait = &wait;
+	int loop_cntr, system_timer_regs;
+	unsigned int min_time = -1, max_time = 0;
+	
+	p_wait->wait_time = priv->wait_time;
+	priv->fd = open(STEP_WAIT_FILE, O_WRONLY | O_SYNC);  /* might need root access */
+	if ( priv->fd < 0 ) {
+		perror(STEP_WAIT_FILE);
+		return;
+		}
+	for (loop_cntr = 0; loop_cntr < priv->loop; loop_cntr++) {
+		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO);
+		lseek(priv->fd, 0, SEEK_SET);
+		if (write(priv->fd, p_wait, sizeof(*p_wait)) != sizeof(*p_wait)) {
+			printf("Rick debug write failed\n");
+			perror(STEP_WAIT_FILE);
+			return;
+			}
+		system_timer_regs = map_read_mem(SYSTEM_TIMER_CLO) - system_timer_regs;
+		if (min_time > system_timer_regs)
+			min_time = system_timer_regs;
+		if (max_time < system_timer_regs)
+			max_time = system_timer_regs;
+		}
+		if (priv->verbose)
+			printf("min time = %dus, max = %dus\n", min_time, max_time);
+	}
 /*
  * Main program:
  */
@@ -353,6 +389,9 @@ int main(int argc,char **argv) {
       case 't':   /* -t or --status */
         priv->get_status = 1;
         break;
+      case 'w':   /* -w or --wait */
+        priv->wait_time = strtol (optarg, NULL, 0);
+        break;
       case 'v':   /* -v or --verbose */
         priv->verbose = 1;
         break;
@@ -384,6 +423,10 @@ int main(int argc,char **argv) {
 		{
 		perror( "pthread_attr_setschedpolicy()" ) ;
 		return( errno ) ;
+		}
+	if (priv->wait_time)  { /* are we just testing the wait timer function? */
+		do_wait_timer(priv);
+		exit(0);
 		}
 	if ((err = pthread_create (&priv->write_thread_id, &priv->attr, (void *) write_thread, (void *) cntr)) != 0)
 		{

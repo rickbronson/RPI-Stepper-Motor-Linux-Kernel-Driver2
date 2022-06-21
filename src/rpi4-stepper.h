@@ -98,6 +98,11 @@ struct STEPPER_SETUP
 	u32 status;  /* upon read, shows the control status register of the DMA, see page 52 of rpi_DATA_2711_1p0.pdf  */
 	};
 
+struct STEPPER_WAIT
+	{
+	s32 wait_time;  /* in ns */
+	};
+
 #define MAX_MOTORS 2 /* max number of motors we'll drive, if you change this, you may have to change MAX_STEPS because the malloc fails */
 #if MAX_MOTORS > 2
 #define MAX_STEPS 3000
